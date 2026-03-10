@@ -19,11 +19,11 @@ ICON_PATH = "/home/mathias/Dokumente/Code/Honor_Camera_Notifier/CameraIcon/"
 ICON_NAME = "public_camera_filled.svg" # "BG_Circle.svg" , "kamera.png"
 ICON = f"{ICON_PATH}{ICON_NAME}"
 
-REPLACE_ID = 424242 # any constant int; all notifications of this app will replace each other. # TODO: Don't rely on a hardcoded number
-
-NOTIFICATION_DURATION = 5000 # Display time of notifications in milliseconds
-
+NOTIFICATION_DURATION = 3000 # Display time of notifications in milliseconds
 NID = 0  # notify-send replacement id; start with 0
+
+WARN_AFTER_SECONDS = 8.0  # debounce window
+_warn_timer = None
 
 def notify_transient(summary: str, timeout_ms: int = NOTIFICATION_DURATION):
     """
@@ -126,6 +126,60 @@ def udev_watch_loop():
         elif action == "remove":
             state.usb_present = False
             notify_transient("Camera disconnected", NOTIFICATION_DURATION) # Disconnected or detached
+
+def _cancel_warn_timer():
+    global _warn_timer
+    if _warn_timer is not None:
+        _warn_timer.cancel()
+        _warn_timer = None
+
+def _arm_missing_warning_timer():
+    """
+    Arm the missing-camera alarm after an "Ejected" or "Disconnected" event.
+    It will only fire if, within WARN_AFTER_SECONDS, we do NOT see:
+      a) USB attached, or
+      b) Storage inserted.
+    """
+    global _warn_timer
+    _cancel_warn_timer()
+    _warn_timer = threading.Timer(WARN_AFTER_SECONDS, _warn_fire_if_still_missing)
+    _warn_timer.daemon = True
+    _warn_timer.start()
+
+def _warn_fire_if_still_missing():
+    # Only alarm if still neither attached nor inserted
+    if state.usb_present is True:
+        return
+    if state.storage_present is True:
+        return
+    # If storage_present is None (unknown), be conservative and don't alarm
+    if state.storage_present is None:
+        return
+    _show_warning_persistent()
+
+
+# --- modify event handlers accordingly ---
+
+def on_storage_removed():
+    state.storage_present = False
+    notify_transient("Ejected", icon_path=ICON_EJECTED, timeout_ms=3500)
+    _arm_missing_warning_timer()
+
+def on_storage_inserted():
+    state.storage_present = True
+    _cancel_warn_timer()
+    _clear_warning()
+
+def on_usb_attached():
+    state.usb_present = True
+    _cancel_warn_timer()
+    _clear_warning()
+    notify_transient("Attached", icon_path=ICON_ATTACHED, timeout_ms=2500)
+
+def on_usb_disconnected():
+    state.usb_present = False
+    notify_transient("Disconnected", icon_path=ICON_DISCONNECTED, timeout_ms=3500)
+    _arm_missing_warning_timer()
 
 def main():
     t1 = threading.Thread(target=input_watch_loop, daemon=True)
