@@ -3,7 +3,6 @@ import glob
 import subprocess
 import threading
 import time
-import sys
 
 import pyudev
 from evdev import InputDevice, ecodes
@@ -11,95 +10,35 @@ from evdev import InputDevice, ecodes
 USB_VENDOR_ID = "3277"
 USB_MODEL_ID = "00a8"
 
-KEY_STORAGE_REMOVED = 587   # KEY_CAMERA_ACCESS_ENABLE
-KEY_STORAGE_INSERTED = 588  # KEY_CAMERA_ACCESS_DISABLE
-KEY_PRIVACY_TOGGLE = 589
-
+KEY_STORAGE_REMOVED = 587   # KEY_CAMERA_ACCESS_ENABLE (aus Storage raus)
+KEY_STORAGE_INSERTED = 588  # KEY_CAMERA_ACCESS_DISABLE (in Storage rein)
 HOTKEY_DEVICE_NAME = "Huawei WMI hotkeys"
+
 APP_NAME = "Honor Camera"
 
-def log(msg: str):
-    print(msg, flush=True)
+def notify_transient(summary: str, timeout_ms: int = 3000):
+    """
+    GNOME: transient hint sorgt i.d.R. dafür, dass es nicht in die History wandert.
+    """
+    cmd = [
+        "notify-send",
+        "-a", APP_NAME,
+        "-t", str(timeout_ms),
+        "-h", "int:transient:1",
+        summary,
+    ]
+    # best effort
+    subprocess.Popen(cmd)
 
 class State:
     def __init__(self):
         self.usb_present = False
-        self.storage_present = True
-        self.ejected_nid = None
+        self.storage_present = None  # unknown until first key
 
 state = State()
 
-def notify(summary: str, transient: bool = True, replace_id=None):
-    cmd = ["notify-send", "-a", APP_NAME]
-    cmd += ["-t", "3500" if transient else "0"]
-    if replace_id is not None:
-        cmd += ["-r", str(replace_id)]
-    cmd += ["-p", summary]
-    try:
-        out = subprocess.check_output(cmd, text=True).strip()
-        return int(out) if out.isdigit() else replace_id
-    except Exception as e:
-        log(f"notify failed: {e}")
-        return replace_id
-
-def show_ejected_persistent():
-    log("STATE: show_ejected")
-    state.ejected_nid = notify("Camera Ejected", transient=False, replace_id=state.ejected_nid)
-
-def hide_ejected():
-    log("STATE: hide_ejected")
-    if state.ejected_nid is not None:
-        notify(" ", transient=True, replace_id=state.ejected_nid)
-        state.ejected_nid = None
-
-def on_storage_removed():
-    log("EVENT: storage_removed (587)")
-    state.storage_present = False
-    if not state.usb_present:
-        show_ejected_persistent()
-
-def on_storage_inserted():
-    log("EVENT: storage_inserted (588)")
-    state.storage_present = True
-    hide_ejected()
-
-def on_usb_attached():
-    log("EVENT: usb_attached")
-    state.usb_present = True
-    hide_ejected()
-    notify("Attached", transient=True)
-
-def on_usb_disconnected():
-    log("EVENT: usb_disconnected")
-    state.usb_present = False
-    notify("Camera disconnected", transient=True)
-    if not state.storage_present:
-        show_ejected_persistent()
-
-def usb_watch_loop():
-    context = pyudev.Context()
-    monitor = pyudev.Monitor.from_netlink(context)
-    monitor.filter_by(subsystem="usb")
-    log("USB monitor started")
-
-    for device in iter(monitor.poll, None):
-        try:
-            if device.action not in ("add", "remove"):
-                continue
-            if device.get("ID_VENDOR_ID") != USB_VENDOR_ID:
-                continue
-            if device.get("ID_MODEL_ID") != USB_MODEL_ID:
-                continue
-
-            log(f"USB match: action={device.action} devpath={device.device_path}")
-            if device.action == "add":
-                on_usb_attached()
-            else:
-                on_usb_disconnected()
-        except Exception as e:
-            log(f"USB loop error: {e}")
-
 def find_hotkey_event_device():
+    # eventX kann wechseln -> per Name suchen
     for path in sorted(glob.glob("/dev/input/event*")):
         try:
             dev = InputDevice(path)
@@ -113,39 +52,65 @@ def input_watch_loop():
     while True:
         path = find_hotkey_event_device()
         if not path:
-            log("Input device not found yet; retrying...")
             time.sleep(1.0)
             continue
 
-        log(f"Input monitor started on {path} ({HOTKEY_DEVICE_NAME})")
         try:
             dev = InputDevice(path)
             for event in dev.read_loop():
-                if event.type != ecodes.EV_KEY:
-                    continue
-                if event.value != 1:  # press only
+                if event.type != ecodes.EV_KEY or event.value != 1:
                     continue
 
-                log(f"KEY press: code={event.code}")
                 if event.code == KEY_STORAGE_REMOVED:
-                    on_storage_removed()
+                    state.storage_present = False
+                    # jedes Mal transient toast (nicht persistent)
+                    notify_transient("Camera Ejected", 3500)
+
                 elif event.code == KEY_STORAGE_INSERTED:
-                    on_storage_inserted()
-                elif event.code == KEY_PRIVACY_TOGGLE:
-                    log("EVENT: privacy_toggle (589) (ignored)")
-        except PermissionError as e:
-            log(f"PermissionError reading {path}: {e}")
-            time.sleep(2.0)
-        except OSError as e:
-            # device disappeared / "connection closed"
-            log(f"Input device error (will retry): {e}")
+                    state.storage_present = True
+                    # optional (wenn du willst):
+                    # notify_transient("Camera Stored", 2000)
+                    pass
+
+        except OSError:
+            # device disappeared / re-enumerated -> rescan
             time.sleep(0.2)
+        except PermissionError:
+            # keine Rechte -> warte, damit user/udev das fixen kann
+            time.sleep(2.0)
+
+def udev_watch_loop():
+    context = pyudev.Context()
+    monitor = pyudev.Monitor.from_netlink(context)
+
+    # Wir hören auf video4linux, weil remove dort sehr zuverlässig kommt
+    monitor.filter_by(subsystem="video4linux")
+
+    for device in iter(monitor.poll, None):
+        action = device.action
+        if action not in ("add", "remove"):
+            continue
+
+        # Die udev-properties bei video4linux enthalten bei dir ID_VENDOR_ID/ID_MODEL_ID
+        if device.get("ID_VENDOR_ID") != USB_VENDOR_ID:
+            continue
+        if device.get("ID_MODEL_ID") != USB_MODEL_ID:
+            continue
+
+        if action == "add":
+            state.usb_present = True
+            notify_transient("Attached", 2500)
+
+        elif action == "remove":
+            state.usb_present = False
+            notify_transient("Camera disconnected", 3500)
 
 def main():
-    t1 = threading.Thread(target=usb_watch_loop, daemon=True)
-    t2 = threading.Thread(target=input_watch_loop, daemon=True)
+    t1 = threading.Thread(target=input_watch_loop, daemon=True)
+    t2 = threading.Thread(target=udev_watch_loop, daemon=True)
     t1.start()
     t2.start()
+
     while True:
         time.sleep(3600)
 
