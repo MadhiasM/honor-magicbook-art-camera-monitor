@@ -110,6 +110,33 @@ def _clear_warning():
     _close_notification(WARN_NID)
     warn_active = False
 
+def clear_warning_and_toast(summary: str, timeout_ms: int = NOTIFICATION_DURATION):
+    """
+    Atomically: close warning (if active) and then show a transient toast.
+    Prevents the "inserted" popup from being swallowed / going only to notification center.
+    """
+    global NID, WARN_NID, warn_active
+
+    with _notify_lock:
+        if warn_active:
+            _close_notification(WARN_NID)
+            warn_active = False
+            time.sleep(WARNING_CLOSE_GRACE_MS / 1000.0)
+
+        cmd = [
+            "notify-send",
+            "-a", APP_NAME,
+            "-t", str(timeout_ms),
+            "-h", "int:transient:1",
+            "-p",
+            "-r", str(NID),
+            "-i", ICON,
+            summary,
+        ]
+        out = subprocess.check_output(cmd, text=True).strip()
+        if out.isdigit():
+            NID = int(out)
+
 def _arm_missing_warning_timer():
     """
     Arm the missing-camera alarm after an "Ejected" or "Disconnected" event.
@@ -185,9 +212,8 @@ def input_watch_loop():
 
                 elif event.code == KEY_STORAGE_INSERTED:
                     state.storage_present = True
-                    notify_transient("Camera inserted")
                     _cancel_warn_timer()
-                    _clear_warning()
+                    clear_warning_and_toast("Camera inserted", NOTIFICATION_DURATION)
 
         except OSError:
             # device disappeared / re-enumerated -> rescan
@@ -217,9 +243,8 @@ def udev_watch_loop():
 
         if action == "add":
             state.usb_present = True
-            notify_transient("Camera attached")
             _cancel_warn_timer()
-            _clear_warning()
+            clear_warning_and_toast("Camera attached", NOTIFICATION_DURATION)
 
         elif action == "remove":
             state.usb_present = False
