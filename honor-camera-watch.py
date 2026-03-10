@@ -15,19 +15,29 @@ KEY_STORAGE_INSERTED = 588  # KEY_CAMERA_ACCESS_DISABLE (in Storage rein)
 HOTKEY_DEVICE_NAME = "Huawei WMI hotkeys"
 
 APP_NAME = "Honor Camera"
+ICON_PATH = "/home/mathias/Dokumente/Code/Honor_Camera_Notifier/CameraIcon/"
+ICON_NAME = "public_camera_filled.svg" # "BG_Circle.svg" , "kamera.png"
+ICON = f"{ICON_PATH}{ICON_NAME}"
 
-def notify_transient(summary: str, timeout_ms: int = 3000):
+REPLACE_ID = 424242 # any constant int; all notifications of this app will replace each other. # TODO: Don't rely on a hardcoded number
+
+NOTIFICATION_DURATION = 5000 # Display time of notifications in milliseconds
+
+def notify_transient(summary: str, timeout_ms: int = NOTIFICATION_DURATION):
     """
-    GNOME: transient hint sorgt i.d.R. dafür, dass es nicht in die History wandert.
+    GNOME: transient hint verhindert, dass Benachrichtigung in History wandert.
     """
     cmd = [
         "notify-send",
         "-a", APP_NAME,
         "-t", str(timeout_ms),
-        "-h", "int:transient:1",
+        "-h", "int:transient:1", # why not -e?
+        #"-p", str(REPLACE_ID),
+        "-r", str(REPLACE_ID),
+        #"-u", "critical",
+        "-i", ICON,
         summary,
     ]
-    # best effort
     subprocess.Popen(cmd)
 
 class State:
@@ -38,7 +48,6 @@ class State:
 state = State()
 
 def find_hotkey_event_device():
-    # eventX kann wechseln -> per Name suchen
     for path in sorted(glob.glob("/dev/input/event*")):
         try:
             dev = InputDevice(path)
@@ -63,13 +72,12 @@ def input_watch_loop():
 
                 if event.code == KEY_STORAGE_REMOVED:
                     state.storage_present = False
-                    # jedes Mal transient toast (nicht persistent)
-                    notify_transient("Camera Ejected", 3500)
+                    # transient toast (nicht persistent)
+                    notify_transient("Camera ejected", NOTIFICATION_DURATION)
 
                 elif event.code == KEY_STORAGE_INSERTED:
-                    state.storage_present = True
-                    # optional (wenn du willst):
-                    # notify_transient("Camera Stored", 2000)
+                    state.storage_present = True # TODO: Fix
+                    notify_transient("Camera inserted", NOTIFICATION_DURATION) # Stored or inserted
                     pass
 
         except OSError:
@@ -82,8 +90,6 @@ def input_watch_loop():
 def udev_watch_loop():
     context = pyudev.Context()
     monitor = pyudev.Monitor.from_netlink(context)
-
-    # Wir hören auf video4linux, weil remove dort sehr zuverlässig kommt
     monitor.filter_by(subsystem="video4linux")
 
     for device in iter(monitor.poll, None):
@@ -91,19 +97,22 @@ def udev_watch_loop():
         if action not in ("add", "remove"):
             continue
 
-        # Die udev-properties bei video4linux enthalten bei dir ID_VENDOR_ID/ID_MODEL_ID
         if device.get("ID_VENDOR_ID") != USB_VENDOR_ID:
             continue
         if device.get("ID_MODEL_ID") != USB_MODEL_ID:
             continue
 
+        # Dedupe: nur die Capture-Node (video0) zählt
+        caps = device.get("ID_V4L_CAPABILITIES", "")
+        if ":capture:" not in caps:
+            continue
+
         if action == "add":
             state.usb_present = True
-            notify_transient("Attached", 2500)
-
+            notify_transient("Camera attached", NOTIFICATION_DURATION)
         elif action == "remove":
             state.usb_present = False
-            notify_transient("Camera disconnected", 3500)
+            notify_transient("Camera disconnected", NOTIFICATION_DURATION) # Disconnected or detached
 
 def main():
     t1 = threading.Thread(target=input_watch_loop, daemon=True)
