@@ -16,7 +16,9 @@
 - Fix persistent Camera Disconnect notification 
 - Remove hardcoded path
 - Create Service
-
+- Create isntructions
+  - sudo usermod -aG input mathias so no root needed
+  - Deploy Service
 # Done
 - Any new banner should override present banner
 - Icon (mono)
