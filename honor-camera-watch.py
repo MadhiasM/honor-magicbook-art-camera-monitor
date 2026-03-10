@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import glob
 import subprocess
+import os
 import threading
 import time
 
@@ -15,7 +16,9 @@ KEY_STORAGE_INSERTED = 588  # KEY_CAMERA_ACCESS_DISABLE (in Storage rein)
 HOTKEY_DEVICE_NAME = "Huawei WMI hotkeys"
 
 APP_NAME = "Honor Camera"
-ICON_PATH = "/home/mathias/Dokumente/Code/Honor_Camera_Notifier/CameraIcon/"
+
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+ICON_PATH = os.path.join(SCRIPT_DIR, "CameraIcon")
 ICON_NAME = "public_camera_filled.svg" # "BG_Circle.svg" , "kamera.png"
 ICON = f"{ICON_PATH}{ICON_NAME}"
 
