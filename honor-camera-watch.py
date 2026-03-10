@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 import glob
-import subprocess
 import os
+import subprocess
 import threading
 import time
 
@@ -20,7 +20,7 @@ APP_NAME = "Honor Camera"
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 ICON_PATH = os.path.join(SCRIPT_DIR, "CameraIcon")
 ICON_NAME = "public_camera_filled.svg" # "BG_Circle.svg" , "kamera.png"
-ICON = f"{ICON_PATH}{ICON_NAME}"
+ICON = os.path.join(ICON_PATH, ICON_NAME)
 
 NOTIFICATION_DURATION = 3000 # Display time of notifications in milliseconds
 
