@@ -14,6 +14,8 @@
 - Either hide "Honor Camera" or remove "Camera" from text output (reduntant information)
 - Multi Language Support
 - Fix persistent Camera Disconnect notification 
+- Remove hardcoded path
+- Create Service
 
 # Done
 - Any new banner should override present banner
