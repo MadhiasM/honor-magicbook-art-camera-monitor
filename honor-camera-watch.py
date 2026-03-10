@@ -23,22 +23,35 @@ REPLACE_ID = 424242 # any constant int; all notifications of this app will repla
 
 NOTIFICATION_DURATION = 5000 # Display time of notifications in milliseconds
 
+NID = 0  # notify-send replacement id; start with 0
+
 def notify_transient(summary: str, timeout_ms: int = NOTIFICATION_DURATION):
     """
-    GNOME: transient hint verhindert, dass Benachrichtigung in History wandert.
+    GNOME: transient hint prevents notification from going to history / notification center.
+    Uses notify-send -p to get an ID, and -r <previous_id> to replace immediately.
+    This matches the behavior you quoted (NID=$(notify-send -p -r $NID ...)).
     """
+    global NID
+
     cmd = [
         "notify-send",
         "-a", APP_NAME,
         "-t", str(timeout_ms),
         "-h", "int:transient:1", # why not -e?
-        #"-p", str(REPLACE_ID),
-        "-r", str(REPLACE_ID),
+        "-p",
+        "-r", str(NID),       # replace previous
         #"-u", "critical",
         "-i", ICON,
         summary,
     ]
-    subprocess.Popen(cmd)
+    try:
+        out = subprocess.check_output(cmd, text=True).strip()
+        # notify-send -p returns the new/current id; keep it for next replace
+        if out.isdigit():
+            NID = int(out)
+    except Exception:
+        # fallback: fire-and-forget (no replacement)
+        subprocess.Popen([c for c in cmd if c not in ("-p", "-r", str(NID))])
 
 class State:
     def __init__(self):
